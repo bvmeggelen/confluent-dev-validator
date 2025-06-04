@@ -1,5 +1,18 @@
 > This is a proof of concept, quickly put together. Quality does not exist here.
 
+# Quick Start
+
+```shell
+docker compose up -d
+
+# open http://localhost:9021/
+# create topic "debug"
+
+docker run confluent-js sh -c "node produce.js 1"
+
+# browse to Topics > debug > messages and see your message
+```
+
 # Confluent Kafka Development Environment
 
 A complete development environment for working with Apache Kafka, Schema Registry, and Avro schemas using JavaScript/Node.js.
@@ -18,7 +31,3 @@ A complete development environment for working with Apache Kafka, Schema Registr
 - Docker and Docker Compose
 - Node.js 18+ (for local development)
 - Git
-
-## 🛠️ Quick Start
-
-### 1. Start the Confluent Platform
