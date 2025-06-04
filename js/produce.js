@@ -662,7 +662,13 @@ function handleSchemaRegistryError(error, subject) {
 
 	try {
 		const topic = 'debug';
-		const sampleId = 1; // Use sample 0001.example.*
+		const sampleId = process.argv[2];
+
+		if (!sampleId) {
+			console.error(`usage: node produce.js <sampleId>`);
+			process.exit(1);
+			return;
+		}
 
 		// Load sample data
 		const [sampleJsonData, avscSchema] = readSample(sampleId);
