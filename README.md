@@ -31,3 +31,9 @@ A complete development environment for working with Apache Kafka, Schema Registr
 - Docker and Docker Compose
 - Node.js 18+ (for local development)
 - Git
+
+## Useful links
+
+- https://docs.confluent.io/kafka-clients/javascript/current/overview.html#installation
+- https://github.com/confluentinc/cp-all-in-one/tree/7.9.0-post/cp-all-in-one
+- https://docs.confluent.io/platform/current/get-started/platform-quickstart.html
