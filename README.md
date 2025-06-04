@@ -13,6 +13,10 @@ docker run confluent-js sh -c "node produce.js 1"
 # browse to Topics > debug > messages and see your message
 ```
 
+# Samples
+
+See `~/samples/`. Make sure for every .json file, there must be an .avsc file.
+
 # Confluent Kafka Development Environment
 
 A complete development environment for working with Apache Kafka, Schema Registry, and Avro schemas using JavaScript/Node.js.
