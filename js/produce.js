@@ -5,6 +5,78 @@ const {
 
 const axios = require('axios'); // You may need to install axios: npm install axios
 const avro = require('avsc'); // You may need to install avsc: npm install avsc
+const fs = require('fs');
+const path = require('path');
+
+const samplesDirectory = 'samples';
+
+/**
+ * @description reads avsc and json files from samples directory.
+ * Files in the samples/ directory must be named like 0000.[a-z].[json|avsc]
+ *
+ * Throws error if file could not be found
+ *
+ * @param id
+ * @returns [{}, {}]
+ */
+function readSample(id) {
+	const samplesDir = path.join(__dirname, 'samples');
+
+	// Pad the ID with leading zeros to match the format (e.g., "1" becomes "0001")
+	const paddedId = id.toString().padStart(4, '0');
+
+	let jsonData = {};
+	let avscSchema = {};
+
+	try {
+		// Read all files in the samples directory
+		const files = fs.readdirSync(samplesDir);
+
+		// Find matching files for this ID
+		const jsonFile = files.find(file => {
+			const pattern = new RegExp(`^${paddedId}\\.[a-z]+\\.json$`);
+			return pattern.test(file);
+		});
+
+		const avscFile = files.find(file => {
+			const pattern = new RegExp(`^${paddedId}\\.[a-z]+\\.avsc$`);
+			return pattern.test(file);
+		});
+
+		if (!jsonFile) {
+			throw new Error(`JSON file not found for ID ${id} (expected pattern: ${paddedId}.[a-z].json)`);
+		}
+
+		if (!avscFile) {
+			throw new Error(`AVSC file not found for ID ${id} (expected pattern: ${paddedId}.[a-z].avsc)`);
+		}
+
+		// Read JSON file
+		const jsonPath = path.join(samplesDir, jsonFile);
+		const jsonContent = fs.readFileSync(jsonPath, 'utf8');
+		try {
+			jsonData = JSON.parse(jsonContent);
+		} catch (parseError) {
+			throw new Error(`Failed to parse JSON file ${jsonFile}: ${parseError.message}`);
+		}
+
+		// Read AVSC file
+		const avscPath = path.join(samplesDir, avscFile);
+		const avscContent = fs.readFileSync(avscPath, 'utf8');
+		try {
+			avscSchema = JSON.parse(avscContent);
+		} catch (parseError) {
+			throw new Error(`Failed to parse AVSC file ${avscFile}: ${parseError.message}`);
+		}
+	} catch (error) {
+		if (error.code === 'ENOENT' && error.path === samplesDir) {
+			throw new Error(`Samples directory not found: ${samplesDir}`);
+		}
+		throw error;
+	}
+
+	return [jsonData, avscSchema];
+}
 
 const producer = new Kafka().producer({
 	'bootstrap.servers': 'broker:29092',
@@ -437,9 +509,15 @@ function printDeliveryReports(deliveryReports, topic, messageCount) {
 
 	try {
 		const topic = 'debug';
-		const messages = [
-			{ a: 1, b: 'foo', c: { d: 'bar' } },
-		];
+
+		const sampleId = process.argv[2];
+		if (!sampleId) {
+			console.error(`usage: node ${process.argv[1]} sampleId`);
+			process.exit(1);
+		}
+
+		const [jsonData, avscSchema] = readSample(sampleId);
+		const messages = [jsonData];
 
 		// Validate and encode messages
 		const encodedMessages = await validateAndEncodeMessages(topic, messages);
@@ -452,8 +530,6 @@ function printDeliveryReports(deliveryReports, topic, messageCount) {
 			topic,
 			messages: encodedMessages
 		});
-
-		console.log({deliveryReports});
 
 		printDeliveryReports(deliveryReports, topic, messages.length);
 

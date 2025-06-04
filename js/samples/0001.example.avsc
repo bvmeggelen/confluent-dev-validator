@@ -1,0 +1,33 @@
+{
+  "doc": "Sample schema to help you get started.",
+  "fields": [
+    {
+      "name": "a",
+      "type": "int"
+    },
+    {
+      "name": "b",
+      "type": "string"
+    },
+    {
+      "default": null,
+      "name": "c",
+      "type": [
+        "null",
+        {
+          "fields": [
+            {
+              "name": "d",
+              "type": "string"
+            }
+          ],
+          "name": "cType",
+          "type": "record"
+        }
+      ]
+    }
+  ],
+  "name": "sampleRecord",
+  "namespace": "com.example",
+  "type": "record"
+}
