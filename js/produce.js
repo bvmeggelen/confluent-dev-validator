@@ -306,7 +306,7 @@ function printValidationResults(validationResult) {
 		console.log(`  - Subject: ${validationResult.schemaInfo.value.subject}`);
 	}
 
-	if (validationResult.warnings.length > 0) {
+	if (validationResult.warnings?.length > 0) {
 		console.log(`\n⚠️  WARNINGS (${validationResult.warnings.length}):`);
 		validationResult.warnings.forEach((warning, index) => {
 			console.log(`  ${index + 1}. ${warning.message}`);
@@ -314,7 +314,7 @@ function printValidationResults(validationResult) {
 		});
 	}
 
-	if (validationResult.errors.length > 0) {
+	if (validationResult.errors?.length > 0) {
 		console.log(`\n❌ ERRORS (${validationResult.errors.length}):`);
 		validationResult.errors.forEach((error, index) => {
 			console.log(`\n  ${index + 1}. ${JSON.stringify(error.message)}`);
@@ -344,20 +344,6 @@ function printValidationResults(validationResult) {
 	}
 
 	console.log('\n===============================================\n');
-}
-
-/**
- * Get all subjects from Schema Registry
- * @returns {Promise<Array>} List of subjects
- */
-async function getAllSubjects() {
-	try {
-		const response = await axios.get(`${SCHEMA_REGISTRY_URL}/subjects`);
-		return response.data;
-	} catch (error) {
-		console.error('Failed to fetch subjects from Schema Registry:', error.message);
-		throw error;
-	}
 }
 
 /**
@@ -504,39 +490,232 @@ function printDeliveryReports(deliveryReports, topic, messageCount) {
 	console.log('\n=====================================\n');
 }
 
+/**
+ * Validate messages against a registered schema in Schema Registry
+ * @param {string} topic - The Kafka topic name
+ * @param {Array} messages - Array of message objects
+ * @param {number} schemaId - The registered schema ID
+ * @returns {Promise<Object>} Validation result
+ */
+async function validateMessagesAgainstRegisteredSchema(topic, messages, schemaId) {
+	const validationResult = {
+		valid: true,
+		schemaId,
+		totalMessages: messages.length,
+		validatedMessages: 0,
+		errors: [],
+		schemaInfo: {}
+	};
+
+	try {
+		// Get the schema from Schema Registry
+		const schemaDetails = await getSchemaById(schemaId);
+		const parsedSchema = parseAvroSchema(schemaDetails.schema);
+
+		validationResult.schemaInfo = {
+			id: schemaId,
+			schema: JSON.parse(schemaDetails.schema),
+			subject: schemaDetails.subject || `${topic}-value`
+		};
+
+		// Validate each message
+		for (let i = 0; i < messages.length; i++) {
+			const message = messages[i];
+			const messageValidation = validateMessage(message, parsedSchema, i);
+
+			if (!messageValidation.valid) {
+				validationResult.errors.push({
+					type: 'MESSAGE_VALIDATION_ERROR',
+					message: `Message ${i} validation failed against registered schema ${schemaId}`,
+					...messageValidation.error
+				});
+				validationResult.valid = false;
+			}
+
+			validationResult.validatedMessages++;
+		}
+
+		return validationResult;
+
+	} catch (error) {
+		validationResult.valid = false;
+		validationResult.errors.push({
+			type: 'SCHEMA_REGISTRY_ERROR',
+			message: `Failed to validate against registered schema ${schemaId}: ${error.message}`,
+			originalError: error.message
+		});
+		return validationResult;
+	}
+}
+
+/**
+ * Register a schema from a sample file to Schema Registry
+ * @param {string} topic - The Kafka topic name
+ * @param {number|string} sampleId - The sample ID to load
+ * @param {string} type - 'key' or 'value'
+ * @returns {Promise<Object>} Schema registration result with { id, subject }
+ */
+async function registerSchemaFromSample(topic, sampleId, type = 'value') {
+	const [, avscSchema] = readSample(sampleId);
+	const subject = `${topic}-${type}`;
+
+	console.log(`📤 Registering schema for subject: ${subject}`);
+
+	try {
+		const response = await axios.post(
+			`${SCHEMA_REGISTRY_URL}/subjects/${subject}/versions`,
+			{ schema: JSON.stringify(avscSchema) },
+			{ headers: { 'Content-Type': 'application/vnd.schemaregistry.v1+json' } }
+		);
+
+		console.log(`✅ Schema registered with ID: ${response.data.id}`);
+		return { id: response.data.id, subject };
+
+	} catch (error) {
+		handleSchemaRegistryError(error, subject);
+	}
+}
+
+/**
+ * Register schema and validate messages in one step
+ * @param {string} topic - The Kafka topic name
+ * @param {number|string} sampleId - The sample ID to load
+ * @param {Array} messages - Messages to validate
+ * @param {string} type - 'key' or 'value'
+ * @returns {Promise<Object>} Combined registration and validation result
+ */
+async function registerSchemaAndValidateMessages(topic, sampleId, messages, type = 'value') {
+	console.log(`🔄 Processing sample ${sampleId} for topic: ${topic}`);
+
+	// Load and validate schema format
+	const [, avscSchema] = readSample(sampleId);
+	validateSchemaFormat(avscSchema, sampleId);
+
+	// Register schema to Schema Registry
+	const { id: schemaId, subject } = await registerSchemaFromSample(topic, sampleId, type);
+
+	// Validate messages against registered schema
+	console.log(`🔍 Validating ${messages.length} message(s) against registered schema...`);
+	const validationResult = await validateMessagesAgainstRegisteredSchema(topic, messages, schemaId);
+
+	// Add registration metadata
+	validationResult.registrationInfo = {
+		schemaId,
+		sampleId,
+		subject,
+		registeredAt: new Date().toISOString()
+	};
+
+	return validationResult;
+}
+
+/**
+ * Validate that a schema can be parsed as valid Avro
+ * @param {Object} avscSchema - The schema object to validate
+ * @param {string|number} sampleId - Sample ID for error reporting
+ */
+function validateSchemaFormat(avscSchema, sampleId) {
+	try {
+		parseAvroSchema(JSON.stringify(avscSchema));
+		console.log('✅ Schema format is valid');
+	} catch (parseError) {
+		throw new SchemaValidationError(`Invalid Avro schema in sample ${sampleId}`, {
+			errorType: 'SCHEMA_PARSE_ERROR',
+			sampleId,
+			originalError: parseError.message
+		});
+	}
+}
+
+/**
+ * Handle Schema Registry API errors with descriptive messages
+ * @param {Error} error - The axios error
+ * @param {string} subject - The schema subject name
+ */
+function handleSchemaRegistryError(error, subject) {
+	if (!error.response) {
+		if (error.code === 'ECONNREFUSED') {
+			throw new Error(`Cannot connect to Schema Registry at ${SCHEMA_REGISTRY_URL}. Is it running?`);
+		}
+		throw new Error(`Network error during schema registration: ${error.message}`);
+	}
+
+	const { status, data } = error.response;
+	const errorMessage = data.message || data.error_code || error.response.statusText;
+
+	switch (status) {
+		case 409:
+			console.log(`ℹ️  Schema already exists for subject: ${subject}`);
+			throw new Error(`Schema conflict: ${errorMessage}`);
+		case 422:
+			throw new Error(`Invalid schema format: ${errorMessage}`);
+		case 401:
+			throw new Error(`Authentication failed: ${errorMessage}`);
+		case 403:
+			throw new Error(`Authorization failed: ${errorMessage}`);
+		default:
+			throw new Error(`Schema Registry error (${status}): ${errorMessage}`);
+	}
+}
 (async () => {
 	await producer.connect();
 
 	try {
 		const topic = 'debug';
+		const sampleId = 1; // Use sample 0001.example.*
 
-		const sampleId = process.argv[2];
-		if (!sampleId) {
-			console.error(`usage: node ${process.argv[1]} sampleId`);
-			process.exit(1);
+		// Load sample data
+		const [sampleJsonData, avscSchema] = readSample(sampleId);
+
+		// Use sample data or custom messages
+		const messages = [sampleJsonData];
+
+		// Register schema and validate messages - this is the critical step
+		console.log('\n🚀 Starting schema registration and validation process...');
+		const validationResult = await registerSchemaAndValidateMessages(topic, sampleId, messages, 'value');
+
+		// Print validation results
+		printValidationResults(validationResult);
+
+		// Only continue if schema registration and validation succeeded
+		if (!validationResult.valid) {
+			throw new SchemaValidationError('Schema registration or message validation failed', validationResult);
 		}
 
-		const [jsonData, avscSchema] = readSample(sampleId);
-		const messages = [jsonData];
+		console.log(`\n✅ Schema registered and messages validated successfully!`);
+		console.log(`   Schema ID: ${validationResult.registrationInfo.schemaId}`);
+		console.log(`   Subject: ${validationResult.registrationInfo.subject}`);
 
-		// Validate and encode messages
-		const encodedMessages = await validateAndEncodeMessages(topic, messages);
+		// Now encode and send messages using the registered schema
+		console.log('\n📦 Encoding messages with registered schema...');
+		const schemaId = validationResult.registrationInfo.schemaId;
+		const schemaDetails = await getSchemaById(schemaId);
+		const parsedSchema = parseAvroSchema(schemaDetails.schema);
 
-		// Optional: List all available subjects in Schema Registry
-		// const subjects = await getAllSubjects();
-		// console.log('Available subjects in Schema Registry:', subjects);
+		const encodedMessages = messages.map((message, index) => {
+			const encodedValue = encodeAvroMessage(message, parsedSchema, schemaId);
+			return {
+				value: encodedValue,
+				key: index.toString()
+			};
+		});
 
+		console.log(`✅ Successfully encoded ${encodedMessages.length} messages`);
+
+		// Send messages
+		console.log('\n🚀 Sending messages to Kafka...');
 		const deliveryReports = await producer.send({
 			topic,
 			messages: encodedMessages
 		});
 
-		printDeliveryReports(deliveryReports, topic, messages.length);
+		printDeliveryReports(deliveryReports, topic, encodedMessages.length);
 
 		await producer.disconnect();
+
 	} catch (e) {
 		if (e instanceof SchemaValidationError) {
-			console.error('\n🚨 SCHEMA VALIDATION FAILED 🚨');
+			console.error('\n🚨 SCHEMA OPERATION FAILED 🚨');
 			console.error('Error:', e.message);
 			// if (e.details) {
 			// 	console.error('Details:', JSON.stringify(e.details, null, 2));
@@ -545,5 +724,6 @@ function printDeliveryReports(deliveryReports, topic, messageCount) {
 			console.error('General error:', e);
 		}
 		await producer.disconnect();
+		process.exit(1); // Exit with error code since schema registration failed
 	}
 })();
